@@ -6,21 +6,53 @@ import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
 const app = express();
-const port = process.env.PORT || 3000;
 const origins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
-const admin = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '');
+const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+const admin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    })
+  : null;
 app.use(helmet()); app.use(cors({ origin: origins.length ? origins : true })); app.use(express.json({ limit: '1mb' }));
 app.get('/health', (_req,res) => res.json({ ok:true, service:'memorygram', time:new Date().toISOString() }));
 
+// Resolve the caller with the same Supabase project that issued the token.
+// Every protected route uses this identity, including group membership checks.
 async function user(req, res, next) {
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-  if (!token) return res.status(401).json({ error:'Missing authorization token' });
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data.user) return res.status(401).json({ error:'Invalid session' });
-  req.user = data.user; next();
+  const token = /^Bearer ([^\s,]+)$/i.exec(req.get('authorization') ?? '')?.[1];
+  if (!token) return res.status(401).json({ error: 'A bearer token is required.' });
+  if (!admin) return res.status(503).json({ error: 'Authentication is not configured.' });
+  try {
+    const { data, error } = await admin.auth.getUser(token);
+    if (error && (!error.status || error.status >= 500 || error.status === 429)) {
+      return res.status(503).json({ error: 'Authentication is temporarily unavailable.' });
+    }
+    if (error || !data.user) return res.status(401).json({ error: 'Invalid session.' });
+    req.user = data.user;
+    next();
+  } catch {
+    return res.status(503).json({ error: 'Authentication is temporarily unavailable.' });
+  }
 }
+app.get('/v1/me', user, (req, res) => {
+  res.set('Cache-Control', 'no-store').json({ id: req.user.id, email: req.user.email });
+});
 app.get('/v1/quests', user, async (req,res) => {
-  const { data, error } = await admin.from('quests').select('*').or(`group_id.is.null,group_id.eq.${req.query.groupId || ''}`).eq('active',true).order('created_at');
+  const groupId = req.query.groupId;
+  let query = admin.from('quests').select('*').eq('active', true);
+  if (groupId !== undefined) {
+    if (!z.string().uuid().safeParse(groupId).success) {
+      return res.status(400).json({ error: 'Invalid group ID.' });
+    }
+    const member = await admin.from('group_members').select('group_id')
+      .eq('group_id', groupId).eq('user_id', req.user.id).maybeSingle();
+    if (member.error) return res.status(503).json({ error: 'Could not check membership.' });
+    if (!member.data) return res.status(403).json({ error: 'Group membership required.' });
+    query = query.or(`group_id.is.null,group_id.eq.${groupId}`);
+  } else {
+    query = query.is('group_id', null);
+  }
+  const { data, error } = await query.order('created_at');
   if (error) return res.status(400).json({ error:error.message }); res.json({ quests:data });
 });
 app.post('/v1/groups', user, async (req,res) => {
@@ -30,4 +62,4 @@ app.post('/v1/groups', user, async (req,res) => {
   if(error) return res.status(400).json({error:error.message});
   await admin.from('group_members').insert({group_id:data.id,user_id:req.user.id,role:'owner'}); res.status(201).json({group:data});
 });
-app.listen(port, () => console.log(`Memorygram service listening on ${port}`));
+export default app;
