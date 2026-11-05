@@ -1,0 +1,7 @@
+{
+  "name": "memorygram-schema-checks",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test test/profiles.test.js" },
+  "devDependencies": { "@electric-sql/pglite": "0.4.1" }
+}
