@@ -27,7 +27,7 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
     grant select,insert on storage.objects to authenticated;
     alter default privileges in schema public grant select,insert,update,delete on tables to authenticated,anon;
   `);
-  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql']) {
+  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql','004_memory_feed.sql']) {
     await db.exec(await readFile(new URL('../migrations/' + file, import.meta.url), 'utf8'));
   }
   const [ada, ben, cy] = [randomUUID(), randomUUID(), randomUUID()];
@@ -76,8 +76,35 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
   await follow(ben);
   await login(ben); await follow(cy,'approve');
   await login(cy); await visible(true);
+  // An approved follower outside the group can interact once, even on retry.
+  // Both direct reads and mutations must stop when the following edge is removed.
+  const stats = () => rows('select likes,liked,comments from memory_activity(array[$1::uuid])',[mid]);
+  const setLike = wanted => rows('select * from set_memory_like($1,$2)',[mid,wanted]);
+  const commentId = randomUUID();
+  const addComment = (body, id = commentId) => db.query(
+    'insert into memory_comments(id,memory_id,body) values($1,$2,$3) on conflict(id) do nothing',[id,mid,body]);
+  assert.deepEqual(await stats(), [{ likes: 0, liked: false, comments: 0 }]);
+  await setLike(true); await setLike(true);
+  await addComment('Love the photo!'); await addComment('Love the photo!');
+  assert.deepEqual(await stats(), [{ likes: 1, liked: true, comments: 1 }]);
+  await setLike(false); await setLike(false);
+  assert.deepEqual(await stats(), [{ likes: 0, liked: false, comments: 1 }]);
+  await setLike(true);
+  await assert.rejects(addComment('   ',randomUUID()), /check constraint/);
+  await assert.rejects(addComment('a'.repeat(501),randomUUID()), /check constraint/);
+  await assert.rejects(db.query('insert into memory_comments(id,memory_id,author_id,body) values($1,$2,$3,$4)',
+    [randomUUID(),mid,ada,'impersonation']), /permission denied/);
+  await login(ada);
+  assert.deepEqual(await stats(), [{ likes: 1, liked: false, comments: 1 }]);
+  assert.deepEqual(await rows('select author_id,body from memory_comments where memory_id=$1',[mid]),
+    [{ author_id: cy, body: 'Love the photo!' }]);
   await login(ben); await follow(cy,'remove');
   await login(cy); await visible(false);
+  assert.deepEqual(await stats(), []);
+  assert.deepEqual(await rows('select * from memory_comments'), []);
+  assert.deepEqual(await rows('select * from memory_votes'), []);
+  await assert.rejects(addComment('after revocation',randomUUID()), /row-level security/);
+  await assert.rejects(setLike(false), /Memory unavailable/);
   await login(ben); await db.query('select set_profile_privacy(false)');
   await login(cy); await visible(true);
   await assert.rejects(db.query('insert into memory_people values ($1,$2)',[mid,cy]), /row-level security/);
@@ -87,5 +114,6 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
   await assert.rejects(publish([],randomUUID()), /Upload the photo first/);
   assert.equal((await rows('select id from groups')).length, 1);
   await db.exec('reset role; set role anon');
+  await assert.rejects(stats(), /permission denied/);
   await assert.rejects(rows("select * from profile_people('discover',$1)",[cy]), /permission denied/);
 });
