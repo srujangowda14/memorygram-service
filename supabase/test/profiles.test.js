@@ -29,7 +29,7 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
     grant select,insert on storage.objects to authenticated;
     alter default privileges in schema public grant select,insert,update,delete on tables to authenticated,anon;
   `);
-  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql','004_memory_feed.sql','005_memory_spaces.sql','006_nearby_tasks.sql','007_age_quests.sql','008_realtime_chat.sql']) {
+  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql','004_memory_feed.sql','005_memory_spaces.sql','006_nearby_tasks.sql','007_age_quests.sql','008_realtime_chat.sql','009_profile_age.sql']) {
     await db.exec(await readFile(new URL('../migrations/' + file, import.meta.url), 'utf8'));
   }
   assert.deepEqual((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime'")).rows,
@@ -64,6 +64,15 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
   await follow(ada,'approve'); await follow(ada);
   await login(ada);
   assert.deepEqual(await rows("select id from profile_people('friends',$1)", [ada]), [{ id: ben }]);
+  const range = async ids => (await rows('select group_profile_range($1::uuid[]) band',[ids]))[0].band;
+  assert.equal(await range([ben]), 'All ages');
+  await assert.rejects(range([cy]), /mutual friends/);
+  await db.query("insert into profile_birthdays values ($1,current_date-interval '71 years')",[ada]);
+  await login(ben);
+  assert.deepEqual(await rows('select * from profile_birthdays'),[]);
+  await db.query("insert into profile_birthdays values ($1,current_date-interval '68 years')",[ben]);
+  assert.equal(await range([ada]),'65+');
+  await login(ada);
   await publish([ben,ben,ada]); await publish([ben]);
   assert.equal((await rows('select id from groups')).length, 1);
   assert.deepEqual(new Set((await rows('select person_id from memory_people')).map(r => r.person_id)), new Set([ada,ben]));
