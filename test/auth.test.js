@@ -46,6 +46,7 @@ test('bearer verification and group authorization', async t => {
   });
   for (const credential of [undefined, 'Basic x', 'valid-session', 'Bearer expired']) {
     assert.equal((await read('/v1/me', credential)).status, 401);
+    assert.equal((await read('/v1/nearby/spots', credential)).status, 401);
   }
   assert.deepEqual(await (await read('/v1/me', 'Bearer valid-session')).json(),
     { id: memberId, email: 'member@example.test' });

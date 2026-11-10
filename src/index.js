@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { nearbyRouter } from './nearby.js';
 
 const app = express();
 const origins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
@@ -37,6 +38,7 @@ async function user(req, res, next) {
 app.get('/v1/me', user, (req, res) => {
   res.set('Cache-Control', 'no-store').json({ id: req.user.id, email: req.user.email });
 });
+app.use('/v1/nearby', user, nearbyRouter(admin));
 app.get('/v1/quests', user, async (req,res) => {
   const groupId = req.query.groupId;
   let query = admin.from('quests').select('*').eq('active', true);
