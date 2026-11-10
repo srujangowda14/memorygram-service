@@ -29,7 +29,7 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
     grant select,insert on storage.objects to authenticated;
     alter default privileges in schema public grant select,insert,update,delete on tables to authenticated,anon;
   `);
-  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql','004_memory_feed.sql','005_memory_spaces.sql','006_nearby_tasks.sql','007_age_quests.sql','008_realtime_chat.sql','009_profile_age.sql']) {
+  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql','004_memory_feed.sql','005_memory_spaces.sql','006_nearby_tasks.sql','007_age_quests.sql','008_realtime_chat.sql','009_profile_age.sql','010_local_meeting.sql','011_local_outings.sql']) {
     await db.exec(await readFile(new URL('../migrations/' + file, import.meta.url), 'utf8'));
   }
   assert.deepEqual((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime'")).rows,
@@ -228,4 +228,14 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
   await assert.rejects(start(randomUUID(),'solo',[]), /permission denied/);
   await assert.rejects(stats(), /permission denied/);
   await assert.rejects(rows("select * from profile_people('discover',$1)",[cy]), /permission denied/);
+  await db.exec('reset role; set role authenticated');
+  await login(ada);
+  const localRoom=randomUUID();
+  const createLocal=()=>db.query("select start_local_meeting($1,'Library walk',$2,'Central Library','node:123')",[localRoom,[ben]]);
+  await createLocal(); await createLocal();
+  assert.deepEqual(await rows("select nearby->>'meeting' name from quests where group_id=$1 and nearby is not null",[localRoom]),[{name:'Central Library'}]);
+  const outing=()=>db.query("select add_local_outing($1,'Local Cafe','node:456')",[localRoom]);
+  await outing(); await outing();
+  assert.equal((await rows("select id from quests where group_id=$1 and nearby->>'osmId'='node:456'",[localRoom])).length,1);
+  await login(cy); await assert.rejects(outing(),/Group unavailable/);
 });
