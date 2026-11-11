@@ -1,10 +1,12 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import { nearbyRouter } from './nearby.js';
+
+dotenv.config({ path: ['.env.local', '.env'] });
 
 const app = express();
 const origins = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
