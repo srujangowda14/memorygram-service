@@ -29,7 +29,7 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
     grant select,insert on storage.objects to authenticated;
     alter default privileges in schema public grant select,insert,update,delete on tables to authenticated,anon;
   `);
-  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql','004_memory_feed.sql','005_memory_spaces.sql','006_nearby_tasks.sql','007_age_quests.sql','008_realtime_chat.sql','009_profile_age.sql','010_local_meeting.sql','011_local_outings.sql','012_activity_plans.sql']) {
+  for (const file of ['001_memorygram.sql','002_auth_access.sql','003_social_profiles.sql','004_memory_feed.sql','005_memory_spaces.sql','006_nearby_tasks.sql','007_age_quests.sql','008_realtime_chat.sql','009_profile_age.sql','010_local_meeting.sql','011_local_outings.sql','012_activity_plans.sql','013_activity_areas.sql']) {
     await db.exec(await readFile(new URL('../migrations/' + file, import.meta.url), 'utf8'));
   }
   assert.deepEqual((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime'")).rows,
@@ -52,11 +52,18 @@ test('approve follows, publish atomically to each profile, and enforce photo pri
   };
 
   await login(ada);
-  await db.query("insert into activity_plans values ($1,'hiking',37,-122,now()+interval '1 day')",[ada]);
+  await db.query("insert into activity_plans(user_id,category,latitude,longitude,expires_at) values ($1,'hiking',37,-122,now()+interval '1 day')",[ada]);
+  await db.query("update activity_plans set area_label='DTLA' where user_id=$1",[ada]);
   await login(ben);
-  await db.query("insert into activity_plans values ($1,'hiking',37.01,-122,now()+interval '1 day')",[ben]);
+  await db.query("insert into activity_plans(user_id,category,latitude,longitude,expires_at) values ($1,'hiking',37.01,-122,now()+interval '1 day')",[ben]);
   assert.equal((await rows('select * from activity_plans')).length,1);
-  assert.equal((await rows('select * from discover_activity(10)'))[0].user_id,ada);
+  const discovered=(await rows('select * from discover_activity(10)'))[0];
+  assert.equal(discovered.user_id,ada);
+  assert.equal(discovered.area_label,'DTLA');
+  assert.equal('latitude' in discovered,false);
+  assert.equal('longitude' in discovered,false);
+  assert.equal((await rows("update activity_plans set area_label='Wrong' where user_id=$1 returning user_id",[ada])).length,0);
+  await assert.rejects(db.query("update activity_plans set area_label=' ' where user_id=$1",[ben]),/check constraint/);
   assert.equal((await rows('select * from discover_activity(1)')).length,0);
   await assert.rejects(db.query('select discover_activity(101)'),/radius/);
   const activityChat=(await rows('select start_activity_chat($1,10) id',[ada]))[0].id;
